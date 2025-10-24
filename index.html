@@ -1,46 +1,352 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Pico W Motor BLE Control</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pico W Drone Dual Joystick Control</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; background-color: #f0f0f0; }
-        .slider-container { width: 90%; max-width: 500px; margin: 50px auto; padding: 20px; border-radius: 10px; background-color: white; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        .slider { width: 100%; height: 35px; }
-        button { padding: 12px 25px; font-size: 18px; margin: 10px; border: none; border-radius: 5px; cursor: pointer; background-color: #007bff; color: white; transition: background-color 0.3s; }
-        button:hover { background-color: #0056b3; }
-        #status { font-weight: bold; margin-top: 15px; color: #dc3545; }
-        #status.connected { color: #28a745; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            text-align: center; 
+            background-color: #f4f7f6; 
+            margin: 0; 
+            padding: 15px 0; 
+            user-select: none; 
+            -webkit-user-select: none; 
+            touch-action: manipulation;
+        }
+        h1 { color: #333; margin-bottom: 5px; font-size: 1.5em; }
+        
+        /* --- Controles de Seguridad y Estado --- */
+        .main-control-area { width: 95%; max-width: 800px; margin: 0 auto; }
+        .safety-area { 
+            display: flex; 
+            justify-content: space-around; 
+            margin-bottom: 20px; 
+            flex-wrap: wrap;
+        }
+        
+        button { 
+            padding: 12px 25px; 
+            font-size: 16px; 
+            margin: 5px; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            color: white; 
+            transition: background-color 0.15s, transform 0.1s; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+        }
+        button:active { transform: scale(0.95); box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+
+        .btn-connect { background-color: #1abc9c; } 
+        .btn-arm { background-color: #27ae60; } 
+        .btn-arm.disarmed { background-color: #e74c3c; } 
+        .btn-panic { background-color: #c0392b; } 
+
+        #status { font-weight: bold; padding: 8px; border-radius: 4px; margin-top: 10px; background-color: #fff0f0; color: #e74c3c; }
+        #status.connected { background-color: #f0fff0; color: #27ae60; }
+        #arming-status { font-size: 1.1em; margin-top: 10px; color: #34495e; }
+
+        /* --- Joysticks --- */
+        .joystick-container { 
+            display: flex; 
+            justify-content: space-around; 
+            padding: 20px 0; 
+            flex-wrap: wrap;
+        }
+        .joystick-wrapper { margin: 10px; }
+        .joystick-label { font-size: 1em; font-weight: bold; margin-bottom: 10px; color: #555; }
+
+        /* EL MARCO DEL JOYSTICK (Tamaño Reducido) */
+        .joystick-area {
+            width: 38vw; 
+            max-width: 250px; 
+            height: 38vw;
+            max-height: 250px;
+            background-color: #ecf0f1; 
+            border: 1px solid #bdc3c7;
+            border-radius: 50%; 
+            position: relative;
+            touch-action: none; 
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.1); 
+            margin: auto;
+            overflow: hidden; 
+        }
+        
+        /* El Handle (El círculo que se mueve) */
+        .joystick-handle {
+            width: 30%; 
+            height: 30%;
+            background-color: #3498db; 
+            border-radius: 50%;
+            position: absolute;
+            transform: translate(-50%, -50%); 
+            pointer-events: none; 
+            box-shadow: 0 0 15px rgba(0, 150, 255, 0.5), 0 0 5px rgba(0,0,0,0.3); 
+            transition: all 0.05s ease-out; 
+        }
+
+        /* --- Panel de Telemetría --- */
+        #telemetry-panel {
+            margin: 20px auto; 
+            font-size: 1em; 
+            background-color: #ffffff; 
+            padding: 15px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            max-width: 400px;
+        }
+        #telemetry-panel strong { color: #3498db; }
+        .tele-value { display: inline-block; min-width: 50px; }
+
     </style>
 </head>
 <body>
-    <h1>🚀 Pico W Motor BLE Control</h1>
-    <button onclick="connectBLE()">1. Conectar BLE</button>
-    
-    <div class="slider-container">
-        <label for="throttle">2. Acelerador (0-100%): <span id="speed_display">0</span>%</label>
-        <input type="range" min="0" max="100" value="0" class="slider" id="throttle" oninput="updateDisplay()" onchange="sendThrottle()">
+    <h1>Control remoto drone</h1>
+    <p id="arming-status">Estado: DESARMADO</p>
+
+    <div class="main-control-area">
+        <div class="safety-area">
+            <button class="btn-connect" onclick="connectBLE()">Conectar BLE</button>
+            <button id="arm-btn" class="btn-arm disarmed" onclick="toggleArming()">Armar</button>
+            <button class="btn-panic" onclick="sendCommand(COMMANDS.KILL)">Detener</button>
+        </div>
+
+        <p id="status">Desconectado. Click en conectar.</p>
+
+        <div id="telemetry-panel">
+            <strong>Comandos (Setpoint):</strong><br>
+            T: <span id="tele-throttle" class="tele-value">0%</span> | 
+            Y: <span id="tele-yaw" class="tele-value">0%</span><br>
+            P: <span id="tele-pitch" class="tele-value">0°</span> | 
+            R: <span id="tele-roll" class="tele-value">0°</span>
+        </div>
+
+        <div class="joystick-container">
+            <div class="joystick-wrapper">
+                <div class="joystick-label">IZQ: ALTURA (Y) / ROTACIÓN (X)</div>
+                <div id="joystick-left" class="joystick-area">
+                    <div id="handle-left" class="joystick-handle"></div>
+                </div>
+            </div>
+
+            <div class="joystick-wrapper">
+                <div class="joystick-label">DER: PITCH (Y) / ROLL (X)</div>
+                <div id="joystick-right" class="joystick-area">
+                    <div id="handle-right" class="joystick-handle"></div>
+                </div>
+            </div>
+        </div>
     </div>
     
-    <p id="status">Desconectado. Click en Conectar.</p>
-    
     <script>
-        // Los UUIDs deben estar en formato de 128 bits
+        // --- CONFIGURACIÓN Y UUIDS ---
         const SERVICE_UUID_SHORT = 'bbbb'; 
-        const THROTTLE_UUID_SHORT = 'bbbc';
+        const CONTROL_UUID_SHORT = 'bbbc'; 
         
-        let device, throttleCharacteristic;
+        let device, controlCharacteristic;
+        let isArmed = false;
+        let controlInterval = null;
+        
         const statusElement = document.getElementById('status');
-        const throttleSlider = document.getElementById('throttle');
-        const speedDisplay = document.getElementById('speed_display');
+        const armBtn = document.getElementById('arm-btn');
+        const armingStatusElement = document.getElementById('arming-status');
 
-        // Función de utilidad para convertir UUIDs de 16 bits a 128 bits completos
+        const COMMANDS = {
+            ARM: 200,
+            DISARM: 201,
+            KILL: 255, 
+        };
+
+        let THROTTLE_VAL = 0;   
+        let YAW_VAL = 127;      
+        let PITCH_VAL = 127;    
+        let ROLL_VAL = 127;     
+
+        const MAX_TILT_ANGLE = 10;
+        const MAX_YAW_PCT = 12;
+
         function getUuid(shortUuid) {
             return '0000' + shortUuid + '-0000-1000-8000-00805f9b34fb';
         }
 
-        function updateDisplay() {
-            speedDisplay.textContent = throttleSlider.value;
+        // --- LÓGICA DE ENVÍO Y SEGURIDAD (Sin cambios necesarios aquí) ---
+
+        function toggleArming() {
+            if (!controlCharacteristic) return;
+
+            if (isArmed) {
+                sendCommand(COMMANDS.DISARM);
+                clearInterval(controlInterval);
+                handleEnd('left');  
+                handleEnd('right');
+                THROTTLE_VAL = 0;   
+                sendFlightData(); 
+            } else {
+                sendCommand(COMMANDS.ARM);
+                controlInterval = setInterval(sendFlightData, 100); 
+            }
+            
+            isArmed = !isArmed;
+            armBtn.textContent = isArmed ? "DESARMAR" : "ARMAR";
+            armBtn.classList.toggle('disarmed', !isArmed);
+            armingStatusElement.textContent = `Estado: ${isArmed ? "ARMADO" : "DESARMADO"}`;
+        }
+        
+        async function sendCommand(commandCode) {
+            if (!controlCharacteristic) return;
+            
+            const data = new Uint8Array([commandCode, 0, 0, 0]); 
+            
+            try {
+                await controlCharacteristic.writeValue(data);
+                if (commandCode === COMMANDS.KILL) { onDisconnected(); } 
+            } catch (error) {
+                statusElement.textContent = 'Error BLE. Reconectando...';
+                controlCharacteristic = null;
+            }
+        }
+
+        async function sendFlightData() {
+            // Esta función se ejecuta cada 100ms y es la que actualiza el panel de telemetría.
+            if (!controlCharacteristic && isArmed) return;
+
+            // --- 1. Mapeo para feedback visual (en grados y %) ---
+            const PITCH_ANGLE = Math.round(mapRange(PITCH_VAL, 0, 255, -MAX_TILT_ANGLE, MAX_TILT_ANGLE));
+            const ROLL_ANGLE = Math.round(mapRange(ROLL_VAL, 0, 255, -MAX_TILT_ANGLE, MAX_TILT_ANGLE));
+            const YAW_PCT = Math.round(mapRange(YAW_VAL, 0, 255, -MAX_YAW_PCT, MAX_YAW_PCT));
+            const THROTTLE_PCT = Math.round(mapRange(THROTTLE_VAL, 0, 255, 0, 100));
+
+            // 2. Mostrar los valores en el panel de telemetría (¡La clave es esta sección!)
+            document.getElementById('tele-throttle').textContent = `${THROTTLE_PCT}%`;
+            document.getElementById('tele-pitch').textContent = `${PITCH_ANGLE}°`;
+            document.getElementById('tele-roll').textContent = `${ROLL_ANGLE}°`;
+            document.getElementById('tele-yaw').textContent = `${YAW_PCT}%`;
+            
+            if (isArmed && controlCharacteristic) {
+                // 3. Envío de datos
+                const data = new Uint8Array([
+                    Math.min(THROTTLE_VAL, 199), 
+                    YAW_VAL,                    
+                    PITCH_VAL,                  
+                    ROLL_VAL                    
+                ]);
+                
+                try {
+                    await controlCharacteristic.writeValue(data);
+                    statusElement.textContent = `Datos enviados: T:${data[0]} P:${data[2]} R:${data[3]}`;
+                } catch (error) {
+                    statusElement.textContent = 'Error de transmisión. Reconecte.';
+                }
+            }
+        }
+        
+        // --- LÓGICA DE MANEJO DE JOYTICK ---
+
+        function mapRange(value, inMin, inMax, outMin, outMax) {
+            return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+        }
+
+        function handleMove(e, areaId) {
+            e.preventDefault(); 
+            const rect = e.currentTarget.getBoundingClientRect();
+            let clientX, clientY;
+
+            if (e.touches) { 
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else { 
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+            
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            const xRel = clientX - centerX;
+            const yRel = clientY - centerY;
+            
+            const maxRadius = rect.width / 2;
+            const distance = Math.min(maxRadius, Math.sqrt(xRel * xRel + yRel * yRel));
+            const angle = Math.atan2(yRel, xRel);
+
+            const xNorm = maxRadius === 0 ? 0 : distance * Math.cos(angle) / maxRadius;
+            const yNorm = maxRadius === 0 ? 0 : distance * Math.sin(angle) / maxRadius;
+
+            const handle = document.getElementById(`handle-${areaId}`);
+            handle.style.left = `${(xNorm * 50) + 50}%`; 
+            handle.style.top = `${(yNorm * 50) + 50}%`;
+            
+            // Actualización de variables de valor
+            if (areaId === 'left') {
+                THROTTLE_VAL = Math.round(mapRange(-yNorm, -1, 1, 0, 255)); 
+                YAW_VAL = Math.round(mapRange(xNorm, -1, 1, 0, 255));
+            } else if (areaId === 'right') {
+                PITCH_VAL = Math.round(mapRange(-yNorm, -1, 1, 0, 255));
+                ROLL_VAL = Math.round(mapRange(xNorm, -1, 1, 0, 255));
+            }
+            
+            // Si no estás armado, actualiza los setpoints inmediatamente
+            if (!isArmed) {
+                sendFlightData();
+            }
+        }
+
+        function handleEnd(areaId) {
+            const handle = document.getElementById(`handle-${areaId}`);
+            
+            if (areaId === 'left') {
+                handle.style.left = '50%';
+                YAW_VAL = 127;
+            } else if (areaId === 'right') {
+                handle.style.left = '50%';
+                handle.style.top = '50%';
+                PITCH_VAL = 127;
+                ROLL_VAL = 127;
+            }
+        }
+
+        // --- Inicialización de Eventos ---
+        const setupJoystickEvents = (areaId) => {
+            const area = document.getElementById(`joystick-${areaId}`);
+            const handle = document.getElementById(`handle-${areaId}`);
+
+            if (areaId === 'left') {
+                handle.style.left = '50%'; 
+                handle.style.top = '100%'; 
+            } else if (areaId === 'right') {
+                handle.style.left = '50%'; 
+                handle.style.top = '50%'; 
+            }
+            
+            area.addEventListener('pointerdown', (e) => {
+                area.setPointerCapture(e.pointerId);
+                area.onpointermove = (ev) => handleMove(ev, areaId);
+                area.onpointerup = () => {
+                    area.onpointermove = null;
+                    handleEnd(areaId);
+                    if (!isArmed) { sendFlightData(); } // Actualiza al soltar si no está armado
+                };
+                handleMove(e, areaId);
+            });
+        };
+
+        setupJoystickEvents('left');
+        setupJoystickEvents('right');
+        
+        // --- Lógica de Conexión BLE (sin cambios) ---
+        function onDisconnected(event) {
+            statusElement.textContent = 'Desconectado. Volver a conectar.';
+            statusElement.classList.remove('connected');
+            controlCharacteristic = null;
+            clearInterval(controlInterval); 
+            isArmed = false;
+            armBtn.textContent = "ARMAR";
+            armBtn.classList.add('disarmed');
+            armingStatusElement.textContent = "Estado: DESARMADO";
+            
+            handleEnd('left'); handleEnd('right');
+            document.getElementById('handle-left').style.top = '100%';
         }
 
         async function connectBLE() {
@@ -52,7 +358,6 @@
             try {
                 statusElement.textContent = 'Buscando dispositivo...';
                 
-                // 1. Solicitar el dispositivo
                 device = await navigator.bluetooth.requestDevice({
                     filters: [{ name: 'PicoMotorControl' }],
                     optionalServices: [getUuid(SERVICE_UUID_SHORT)]
@@ -60,42 +365,18 @@
                 
                 device.addEventListener('gattserverdisconnected', onDisconnected);
 
-                // 2. Conectar al GATT Server
                 statusElement.textContent = 'Conectando a ' + device.name + '...';
                 const server = await device.gatt.connect();
                 
-                // 3. Obtener Servicio y Característica
                 const service = await server.getPrimaryService(getUuid(SERVICE_UUID_SHORT));
-                throttleCharacteristic = await service.getCharacteristic(getUuid(THROTTLE_UUID_SHORT));
+                controlCharacteristic = await service.getCharacteristic(getUuid(CONTROL_UUID_SHORT));
                 
-                statusElement.textContent = '¡Conectado! Mueva el deslizador.';
+                statusElement.textContent = '¡Conectado! Listo para Armar.';
                 statusElement.classList.add('connected');
                 
             } catch (error) {
                 statusElement.textContent = 'Fallo de conexión: ' + error.message;
                 statusElement.classList.remove('connected');
-            }
-        }
-        
-        function onDisconnected(event) {
-            statusElement.textContent = 'Desconectado. Volver a conectar.';
-            statusElement.classList.remove('connected');
-            throttleCharacteristic = null;
-        }
-
-        async function sendThrottle() {
-            if (!throttleCharacteristic) return;
-            
-            const speed = parseInt(throttleSlider.value);
-            // El MicroPython espera 1 byte sin signo (<B)
-            const data = new Uint8Array([speed]);
-            
-            try {
-                await throttleCharacteristic.writeValue(data);
-                // statusElement.textContent = `Velocidad enviada: ${speed}%`;
-            } catch (error) {
-                statusElement.textContent = 'Error al escribir BLE. Reconectando...';
-                throttleCharacteristic = null;
             }
         }
     </script>
