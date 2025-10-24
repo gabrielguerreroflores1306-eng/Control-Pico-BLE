@@ -1,122 +1,103 @@
-import ubluetooth as bluetooth
-import machine
-import struct
-import time
-from micropython import const
-
-# --- CONFIGURACIÓN DE PINES Y PWM ---
-MOTOR_PIN = 22
-PWM_FREQ = 10000 
-MAX_DUTY = 65535 
-global motor_pwm
-motor_pwm = machine.PWM(machine.Pin(MOTOR_PIN))
-motor_pwm.freq(PWM_FREQ)
-
-# --- VARIABLES GLOBALES DE ESTADO ---
-GLOBAL_MOTOR_SPEED_PCT = 0 
-
-# --- DEFINICIÓN DE UUIDs Y SERVICIOS GATT ---
-# Usamos UUIDs personalizados de 16-bit
-_FLAG_WRITE = const(0x0008)
-_FLAG_NOTIFY = const(0x0010)
-
-_CUSTOM_SERVICE_UUID = bluetooth.UUID(0xBBBB)
-_THROTTLE_CHAR_UUID = bluetooth.UUID(0xBBBC)
-
-_CUSTOM_SERVICE = (
-    _CUSTOM_SERVICE_UUID,
-    (
-        # Característica: Velocidad del Motor (Escritura sin respuesta y Notificación)
-        (_THROTTLE_CHAR_UUID, _FLAG_WRITE | _FLAG_NOTIFY,),
-    ),
-)
-
-
-class MotorBLEControl:
-    def __init__(self, name='PicoMotorControl'):
-        self.ble = bluetooth.BLE()
-        self.ble.active(True)
-        self.ble.irq(self._irq)
-        self.name = name
-        self.connected = False
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pico W Motor BLE Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #f0f0f0; }
+        .slider-container { width: 90%; max-width: 500px; margin: 50px auto; padding: 20px; border-radius: 10px; background-color: white; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .slider { width: 100%; height: 35px; }
+        button { padding: 12px 25px; font-size: 18px; margin: 10px; border: none; border-radius: 5px; cursor: pointer; background-color: #007bff; color: white; transition: background-color 0.3s; }
+        button:hover { background-color: #0056b3; }
+        #status { font-weight: bold; margin-top: 15px; color: #dc3545; }
+        #status.connected { color: #28a745; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Pico W Motor BLE Control</h1>
+    <button onclick="connectBLE()">1. Conectar BLE</button>
+    
+    <div class="slider-container">
+        <label for="throttle">2. Acelerador (0-100%): <span id="speed_display">0</span>%</label>
+        <input type="range" min="0" max="100" value="0" class="slider" id="throttle" oninput="updateDisplay()" onchange="sendThrottle()">
+    </div>
+    
+    <p id="status">Desconectado. Click en Conectar.</p>
+    
+    <script>
+        // Los UUIDs deben estar en formato de 128 bits
+        const SERVICE_UUID_SHORT = 'bbbb'; 
+        const THROTTLE_UUID_SHORT = 'bbbc';
         
-        # Registrar los servicios GATT
-        ((self.throttle_handle,),) = self.ble.gatts_register_services((_CUSTOM_SERVICE, ))
-        
-        # Configurar el anuncio (versión simple que funciona)
-        self.advertisement = self._encode_advertisement()
-        self.start_advertising()
+        let device, throttleCharacteristic;
+        const statusElement = document.getElementById('status');
+        const throttleSlider = document.getElementById('throttle');
+        const speedDisplay = document.getElementById('speed_display');
 
-    def _encode_advertisement(self):
-        """Configura el paquete de anuncio BLE con solo el nombre."""
-        adv_data = bytearray()
-        adv_data += struct.pack('<B', len(self.name) + 1)
-        adv_data += struct.pack('<B', 0x09) # 0x09 = Nombre completo
-        adv_data += self.name.encode()
-        return adv_data
+        // Función de utilidad para convertir UUIDs de 16 bits a 128 bits completos
+        function getUuid(shortUuid) {
+            return '0000' + shortUuid + '-0000-1000-8000-00805f9b34fb';
+        }
 
-    def start_advertising(self):
-        # Inicia la difusión (Broadcasting)
-        self.ble.gap_advertise(100_000, adv_data=self.advertisement)
-        print(f"BLE publicitando como '{self.name}'. Listo para conectar.")
+        function updateDisplay() {
+            speedDisplay.textContent = throttleSlider.value;
+        }
 
-    def _update_pwm(self, speed_percent):
-        """Convierte el porcentaje (0-100) a ciclo de trabajo de 16 bits y lo aplica."""
-        global GLOBAL_MOTOR_SPEED_PCT
-        GLOBAL_MOTOR_SPEED_PCT = max(0, min(100, speed_percent))
-        
-        duty_u16 = int((GLOBAL_MOTOR_SPEED_PCT / 100) * MAX_DUTY)
-        motor_pwm.duty_u16(duty_u16)
-        print(f"Velocidad: {GLOBAL_MOTOR_SPEED_PCT}% (Duty: {duty_u16})")
-
-
-    def _irq(self, event, data):
-        """Manejador de interrupciones BLE."""
-        if event == 1: # _IRQ_CENTRAL_CONNECT
-            self.connected = True
-            print("BLE: Dispositivo conectado.")
-
-        elif event == 2: # _IRQ_CENTRAL_DISCONNECT
-            self.connected = False
-            self._update_pwm(0) # Seguridad: Apagar motor al desconectar
-            self.start_advertising()
-            print("BLE: Desconectado. Re-anunciando...")
-
-        elif event == 3: # _IRQ_GATTS_WRITE (Datos recibidos)
-            conn_handle, attr_handle = data
+        async function connectBLE() {
+            if (!navigator.bluetooth) {
+                statusElement.textContent = 'Error: Web Bluetooth no es compatible con este navegador.';
+                return;
+            }
             
-            if attr_handle == self.throttle_handle:
-                value = self.ble.gatts_read(self.throttle_handle)
-                try:
-                    # El cliente Web Bluetooth enviará 1 byte sin signo (<B)
-                    speed_percent = struct.unpack('<B', value)[0] 
-                    self._update_pwm(speed_percent)
-                except Exception as e:
-                    print(f"Error al desempaquetar el valor BLE: {e}")
-                    pass
+            try {
+                statusElement.textContent = 'Buscando dispositivo...';
+                
+                // 1. Solicitar el dispositivo
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'PicoMotorControl' }],
+                    optionalServices: [getUuid(SERVICE_UUID_SHORT)]
+                });
+                
+                device.addEventListener('gattserverdisconnected', onDisconnected);
 
-
-# --- BUCLE PRINCIPAL ---
-if __name__ == "__main__":
-    
-    # 1. Eliminar la inicialización de Wi-Fi.
-    # 2. Iniciar solo el Control BLE.
-    
-    try:
-        control = MotorBLEControl()
-        print("-" * 50)
-        print("✅ Servidor BLE iniciado. No se requiere Wi-Fi.")
-        print("-" * 50)
+                // 2. Conectar al GATT Server
+                statusElement.textContent = 'Conectando a ' + device.name + '...';
+                const server = await device.gatt.connect();
+                
+                // 3. Obtener Servicio y Característica
+                const service = await server.getPrimaryService(getUuid(SERVICE_UUID_SHORT));
+                throttleCharacteristic = await service.getCharacteristic(getUuid(THROTTLE_UUID_SHORT));
+                
+                statusElement.textContent = '¡Conectado! Mueva el deslizador.';
+                statusElement.classList.add('connected');
+                
+            } catch (error) {
+                statusElement.textContent = 'Fallo de conexión: ' + error.message;
+                statusElement.classList.remove('connected');
+            }
+        }
         
-        # Bucle de espera principal
-        while True:
-            time.sleep(1) # Espera activa
+        function onDisconnected(event) {
+            statusElement.textContent = 'Desconectado. Volver a conectar.';
+            statusElement.classList.remove('connected');
+            throttleCharacteristic = null;
+        }
 
-    except KeyboardInterrupt:
-        print("Programa terminado por el usuario.")
-    except Exception as e:
-        print(f"Error fatal: {e}")
-    finally:
-        # Apagar el motor al salir
-        motor_pwm.duty_u16(0)
-        motor_pwm.deinit()
+        async function sendThrottle() {
+            if (!throttleCharacteristic) return;
+            
+            const speed = parseInt(throttleSlider.value);
+            // El MicroPython espera 1 byte sin signo (<B)
+            const data = new Uint8Array([speed]);
+            
+            try {
+                await throttleCharacteristic.writeValue(data);
+                // statusElement.textContent = `Velocidad enviada: ${speed}%`;
+            } catch (error) {
+                statusElement.textContent = 'Error al escribir BLE. Reconectando...';
+                throttleCharacteristic = null;
+            }
+        }
+    </script>
+</body>
+</html>
