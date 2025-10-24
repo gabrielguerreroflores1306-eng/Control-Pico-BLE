@@ -1,0 +1,122 @@
+import ubluetooth as bluetooth
+import machine
+import struct
+import time
+from micropython import const
+
+# --- CONFIGURACIÓN DE PINES Y PWM ---
+MOTOR_PIN = 22
+PWM_FREQ = 10000 
+MAX_DUTY = 65535 
+global motor_pwm
+motor_pwm = machine.PWM(machine.Pin(MOTOR_PIN))
+motor_pwm.freq(PWM_FREQ)
+
+# --- VARIABLES GLOBALES DE ESTADO ---
+GLOBAL_MOTOR_SPEED_PCT = 0 
+
+# --- DEFINICIÓN DE UUIDs Y SERVICIOS GATT ---
+# Usamos UUIDs personalizados de 16-bit
+_FLAG_WRITE = const(0x0008)
+_FLAG_NOTIFY = const(0x0010)
+
+_CUSTOM_SERVICE_UUID = bluetooth.UUID(0xBBBB)
+_THROTTLE_CHAR_UUID = bluetooth.UUID(0xBBBC)
+
+_CUSTOM_SERVICE = (
+    _CUSTOM_SERVICE_UUID,
+    (
+        # Característica: Velocidad del Motor (Escritura sin respuesta y Notificación)
+        (_THROTTLE_CHAR_UUID, _FLAG_WRITE | _FLAG_NOTIFY,),
+    ),
+)
+
+
+class MotorBLEControl:
+    def __init__(self, name='PicoMotorControl'):
+        self.ble = bluetooth.BLE()
+        self.ble.active(True)
+        self.ble.irq(self._irq)
+        self.name = name
+        self.connected = False
+        
+        # Registrar los servicios GATT
+        ((self.throttle_handle,),) = self.ble.gatts_register_services((_CUSTOM_SERVICE, ))
+        
+        # Configurar el anuncio (versión simple que funciona)
+        self.advertisement = self._encode_advertisement()
+        self.start_advertising()
+
+    def _encode_advertisement(self):
+        """Configura el paquete de anuncio BLE con solo el nombre."""
+        adv_data = bytearray()
+        adv_data += struct.pack('<B', len(self.name) + 1)
+        adv_data += struct.pack('<B', 0x09) # 0x09 = Nombre completo
+        adv_data += self.name.encode()
+        return adv_data
+
+    def start_advertising(self):
+        # Inicia la difusión (Broadcasting)
+        self.ble.gap_advertise(100_000, adv_data=self.advertisement)
+        print(f"BLE publicitando como '{self.name}'. Listo para conectar.")
+
+    def _update_pwm(self, speed_percent):
+        """Convierte el porcentaje (0-100) a ciclo de trabajo de 16 bits y lo aplica."""
+        global GLOBAL_MOTOR_SPEED_PCT
+        GLOBAL_MOTOR_SPEED_PCT = max(0, min(100, speed_percent))
+        
+        duty_u16 = int((GLOBAL_MOTOR_SPEED_PCT / 100) * MAX_DUTY)
+        motor_pwm.duty_u16(duty_u16)
+        print(f"Velocidad: {GLOBAL_MOTOR_SPEED_PCT}% (Duty: {duty_u16})")
+
+
+    def _irq(self, event, data):
+        """Manejador de interrupciones BLE."""
+        if event == 1: # _IRQ_CENTRAL_CONNECT
+            self.connected = True
+            print("BLE: Dispositivo conectado.")
+
+        elif event == 2: # _IRQ_CENTRAL_DISCONNECT
+            self.connected = False
+            self._update_pwm(0) # Seguridad: Apagar motor al desconectar
+            self.start_advertising()
+            print("BLE: Desconectado. Re-anunciando...")
+
+        elif event == 3: # _IRQ_GATTS_WRITE (Datos recibidos)
+            conn_handle, attr_handle = data
+            
+            if attr_handle == self.throttle_handle:
+                value = self.ble.gatts_read(self.throttle_handle)
+                try:
+                    # El cliente Web Bluetooth enviará 1 byte sin signo (<B)
+                    speed_percent = struct.unpack('<B', value)[0] 
+                    self._update_pwm(speed_percent)
+                except Exception as e:
+                    print(f"Error al desempaquetar el valor BLE: {e}")
+                    pass
+
+
+# --- BUCLE PRINCIPAL ---
+if __name__ == "__main__":
+    
+    # 1. Eliminar la inicialización de Wi-Fi.
+    # 2. Iniciar solo el Control BLE.
+    
+    try:
+        control = MotorBLEControl()
+        print("-" * 50)
+        print("✅ Servidor BLE iniciado. No se requiere Wi-Fi.")
+        print("-" * 50)
+        
+        # Bucle de espera principal
+        while True:
+            time.sleep(1) # Espera activa
+
+    except KeyboardInterrupt:
+        print("Programa terminado por el usuario.")
+    except Exception as e:
+        print(f"Error fatal: {e}")
+    finally:
+        # Apagar el motor al salir
+        motor_pwm.duty_u16(0)
+        motor_pwm.deinit()
