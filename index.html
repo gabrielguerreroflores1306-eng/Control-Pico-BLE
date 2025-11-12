@@ -364,7 +364,7 @@
                 
                 // ✅ AJUSTE CLAVE 5: Nombre del dispositivo BLE (debe coincidir con main.py)
                 device = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'PicoDrone' }],
+                    filters: [{ name: 'ControlPicoDrone' }],
                     optionalServices: [getUuid(SERVICE_UUID_SHORT)]
                 });
                 
@@ -387,4 +387,5 @@
     </script>
 </body>
 </html>
+
 
