@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <style>
+        /* Estilos CSS (Sin cambios) */
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
             text-align: center; 
@@ -58,7 +59,7 @@
         .joystick-wrapper { margin: 10px; }
         .joystick-label { font-size: 1em; font-weight: bold; margin-bottom: 10px; color: #555; }
 
-        /* EL MARCO DEL JOYSTICK (Tamaño Reducido) */
+        /* EL MARCO DEL JOYSTICK */
         .joystick-area {
             width: 38vw; 
             max-width: 250px; 
@@ -159,19 +160,21 @@
             KILL: 255, 
         };
 
-        let THROTTLE_VAL = 0;   
-        let YAW_VAL = 127;      
-        let PITCH_VAL = 127;    
-        let ROLL_VAL = 127;     
+        let THROTTLE_VAL = 0;   
+        let YAW_VAL = 127;      
+        let PITCH_VAL = 127;    
+        let ROLL_VAL = 127;     
 
-        const MAX_TILT_ANGLE = 12;
-        const MAX_YAW_PCT = 12;
+        // ✅ AJUSTE CLAVE 3: Ángulo Máximo de Inclinación a 30 grados
+        const MAX_TILT_ANGLE = 30; 
+        // ✅ AJUSTE CLAVE 4: Porcentaje máximo de rotación limitado al 30%
+        const MAX_YAW_PCT = 30; 
 
         function getUuid(shortUuid) {
             return '0000' + shortUuid + '-0000-1000-8000-00805f9b34fb';
         }
 
-        // --- LÓGICA DE ENVÍO Y SEGURIDAD (Sin cambios necesarios aquí) ---
+        // --- LÓGICA DE ENVÍO Y SEGURIDAD ---
 
         function toggleArming() {
             if (!controlCharacteristic) return;
@@ -179,9 +182,9 @@
             if (isArmed) {
                 sendCommand(COMMANDS.DISARM);
                 clearInterval(controlInterval);
-                handleEnd('left');  
+                handleEnd('left');  
                 handleEnd('right');
-                THROTTLE_VAL = 0;   
+                THROTTLE_VAL = 0;   
                 sendFlightData(); 
             } else {
                 sendCommand(COMMANDS.ARM);
@@ -209,16 +212,15 @@
         }
 
         async function sendFlightData() {
-            // Esta función se ejecuta cada 100ms y es la que actualiza el panel de telemetría.
             if (!controlCharacteristic && isArmed) return;
 
-            // --- 1. Mapeo para feedback visual (en grados y %) ---
+            // 1. Mapeo para feedback visual (usa 30 grados y 30% de Yaw)
             const PITCH_ANGLE = Math.round(mapRange(PITCH_VAL, 0, 255, -MAX_TILT_ANGLE, MAX_TILT_ANGLE));
             const ROLL_ANGLE = Math.round(mapRange(ROLL_VAL, 0, 255, -MAX_TILT_ANGLE, MAX_TILT_ANGLE));
             const YAW_PCT = Math.round(mapRange(YAW_VAL, 0, 255, -MAX_YAW_PCT, MAX_YAW_PCT));
             const THROTTLE_PCT = Math.round(mapRange(THROTTLE_VAL, 0, 255, 0, 100));
 
-            // 2. Mostrar los valores en el panel de telemetría (¡La clave es esta sección!)
+            // 2. Mostrar los valores en el panel de telemetría 
             document.getElementById('tele-throttle').textContent = `${THROTTLE_PCT}%`;
             document.getElementById('tele-pitch').textContent = `${PITCH_ANGLE}°`;
             document.getElementById('tele-roll').textContent = `${ROLL_ANGLE}°`;
@@ -228,9 +230,9 @@
                 // 3. Envío de datos
                 const data = new Uint8Array([
                     Math.min(THROTTLE_VAL, 199), 
-                    YAW_VAL,                    
-                    PITCH_VAL,                  
-                    ROLL_VAL                    
+                    YAW_VAL,                    
+                    PITCH_VAL,                  
+                    ROLL_VAL                    
                 ]);
                 
                 try {
@@ -286,7 +288,6 @@
                 ROLL_VAL = Math.round(mapRange(xNorm, -1, 1, 0, 255));
             }
             
-            // Si no estás armado, actualiza los setpoints inmediatamente
             if (!isArmed) {
                 sendFlightData();
             }
@@ -298,6 +299,9 @@
             if (areaId === 'left') {
                 handle.style.left = '50%';
                 YAW_VAL = 127;
+                // Throttle handle debe regresar a 100% (fondo)
+                document.getElementById('handle-left').style.top = '100%';
+                THROTTLE_VAL = 0;
             } else if (areaId === 'right') {
                 handle.style.left = '50%';
                 handle.style.top = '50%';
@@ -325,7 +329,7 @@
                 area.onpointerup = () => {
                     area.onpointermove = null;
                     handleEnd(areaId);
-                    if (!isArmed) { sendFlightData(); } // Actualiza al soltar si no está armado
+                    if (!isArmed) { sendFlightData(); } 
                 };
                 handleMove(e, areaId);
             });
@@ -334,7 +338,7 @@
         setupJoystickEvents('left');
         setupJoystickEvents('right');
         
-        // --- Lógica de Conexión BLE (sin cambios) ---
+        // --- Lógica de Conexión BLE ---
         function onDisconnected(event) {
             statusElement.textContent = 'Desconectado. Volver a conectar.';
             statusElement.classList.remove('connected');
@@ -345,8 +349,8 @@
             armBtn.classList.add('disarmed');
             armingStatusElement.textContent = "Estado: DESARMADO";
             
-            handleEnd('left'); handleEnd('right');
-            document.getElementById('handle-left').style.top = '100%';
+            handleEnd('left'); 
+            handleEnd('right');
         }
 
         async function connectBLE() {
@@ -358,8 +362,9 @@
             try {
                 statusElement.textContent = 'Buscando dispositivo...';
                 
+                // ✅ AJUSTE CLAVE 5: Nombre del dispositivo BLE (debe coincidir con main.py)
                 device = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'PicoMotorControl' }],
+                    filters: [{ name: 'PicoDrone_Final' }],
                     optionalServices: [getUuid(SERVICE_UUID_SHORT)]
                 });
                 
@@ -382,4 +387,3 @@
     </script>
 </body>
 </html>
-
